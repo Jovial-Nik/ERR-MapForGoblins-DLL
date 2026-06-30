@@ -1342,6 +1342,8 @@ void draw_settings_window()
     ImGui::End();
 }
 
+ImGuiKey vk_to_imgui(USHORT vk); // defined below; needed by the WndProc key fallback
+
 // ── Window proc detour: while the menu is open, swallow any LEGACY input msgs
 // (belt-and-suspenders; ER's real input path is raw input, blocked separately
 // in hkGetRawInputData). ImGui input itself is driven from raw input, so we do
@@ -1371,6 +1373,22 @@ LRESULT CALLBACK hkWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
         case WM_KEYDOWN: case WM_KEYUP:
         case WM_SYSKEYDOWN: case WM_SYSKEYUP:
+        {
+            // Feed editing keys to ImGui so InputText shortcuts work: select-all/
+            // copy/paste/cut (Ctrl+A/C/V/X) plus cursor motion and Backspace/Delete.
+            // Raw input (hkGetRawInputData) is the primary key source, but on setups
+            // where the game doesn't route the keyboard through GetRawInputData ImGui
+            // would otherwise get no key events (only WM_CHAR text). Marshaled like all
+            // other IO; AddKeyEvent dedups, so a double-feed (raw + message) is a no-op.
+            const bool down = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+            ImGuiKey k = vk_to_imgui(static_cast<USHORT>(wParam));
+            if (k != ImGuiKey_None)
+            {
+                std::lock_guard<std::mutex> lk(g_key_mtx);
+                g_key_events.push_back({k, down});
+            }
+            return 0;
+        }
         case WM_MOUSEMOVE:
         case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
         case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
