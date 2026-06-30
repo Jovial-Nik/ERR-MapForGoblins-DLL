@@ -42,7 +42,17 @@
     "SearchTooShort": "請輸入至少 2 個字元以搜尋。",
     "SearchNoResults": "未找到物品。",
     "SearchClear": "清除",
-    "SearchCoords": "X: %.0f  Z: %.0f"
+    "SearchCoords": "X: %.0f  Z: %.0f",
+    "TabItems": "物品",
+    "ItemsColName": "名稱",
+    "ItemsColCategory": "類別",
+    "ItemsColLocation": "位置",
+    "ItemsColCoords": "座標",
+    "ItemsColStatus": "狀態",
+    "ItemsStatusCollected": "已收集",
+    "ItemsStatusAvailable": "可獲取",
+    "ItemsFilterAll": "所有類別",
+    "ItemsCount": "%d 個物品"
   },
   "toasts": {
     "MapIconsOn": "地圖圖示：開啟",

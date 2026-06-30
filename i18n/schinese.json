@@ -42,7 +42,17 @@
     "SearchTooShort": "请输入至少 2 个字符以搜索。",
     "SearchNoResults": "未找到物品。",
     "SearchClear": "清除",
-    "SearchCoords": "X: %.0f  Z: %.0f"
+    "SearchCoords": "X: %.0f  Z: %.0f",
+    "TabItems": "物品",
+    "ItemsColName": "名称",
+    "ItemsColCategory": "类别",
+    "ItemsColLocation": "位置",
+    "ItemsColCoords": "坐标",
+    "ItemsColStatus": "状态",
+    "ItemsStatusCollected": "已收集",
+    "ItemsStatusAvailable": "可获取",
+    "ItemsFilterAll": "所有类别",
+    "ItemsCount": "%d 个物品"
   },
   "toasts": {
     "MapIconsOn": "地图图标：开启",

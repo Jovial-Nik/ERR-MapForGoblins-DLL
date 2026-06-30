@@ -42,7 +42,17 @@
     "SearchTooShort": "Type at least 2 characters to search.",
     "SearchNoResults": "No items found.",
     "SearchClear": "Clear",
-    "SearchCoords": "X: %.0f  Z: %.0f"
+    "SearchCoords": "X: %.0f  Z: %.0f",
+    "TabItems": "Items",
+    "ItemsColName": "Name",
+    "ItemsColCategory": "Category",
+    "ItemsColLocation": "Location",
+    "ItemsColCoords": "Coords",
+    "ItemsColStatus": "Status",
+    "ItemsStatusCollected": "Collected",
+    "ItemsStatusAvailable": "Available",
+    "ItemsFilterAll": "All categories",
+    "ItemsCount": "%d items"
   },
   "toasts": {
     "MapIconsOn": "Map icons: ON",

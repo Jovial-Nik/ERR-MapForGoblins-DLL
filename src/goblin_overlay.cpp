@@ -29,6 +29,8 @@
 #include "goblin_map_icons.hpp" // shared DefineBitsLossless2 icon tags (decoded here for the atlas)
 #include "miniz.h"              // zlib inflate to decode the tags
 #include "goblin_inject.hpp"
+#include "goblin_collected.hpp"
+#include "goblin_kindling.hpp"
 #include "goblin_markers.hpp"
 #include "goblin_messages.hpp"
 #include "goblin_map_data.hpp"
@@ -734,6 +736,8 @@ struct SearchEntry
     float posX = 0.0f, posZ = 0.0f;
     uint8_t area_no = 0;
     int32_t baked_text1 = 0;
+    goblin::generated::Category category{};
+    uint64_t row_id = 0;
 };
 
 std::vector<SearchEntry> g_search_index;
@@ -781,9 +785,308 @@ static void build_search_index()
         g_search_index.push_back({std::move(name_utf8), std::move(name_lower),
                                   std::move(loc_utf8),
                                   e.data.posX, e.data.posZ, e.data.areaNo,
-                                  tid1});
+                                  tid1, e.category, e.row_id});
     }
     g_search_index_built = true;
+}
+
+static const char *category_label(goblin::generated::Category cat)
+{
+    using goblin::generated::Category;
+    switch (cat)
+    {
+    case Category::EquipArmaments:        return "Armaments";
+    case Category::EquipArmour:           return "Armour";
+    case Category::EquipAshesOfWar:       return "Ashes of War";
+    case Category::EquipSpirits:          return "Spirits";
+    case Category::EquipTalismans:        return "Talismans";
+    case Category::KeyCelestialDew:       return "Celestial Dew";
+    case Category::KeyCookbooks:          return "Cookbooks";
+    case Category::KeyCrystalTears:       return "Crystal Tears";
+    case Category::KeyImbuedSwordKeys:    return "Imbued Sword Keys";
+    case Category::KeyLarvalTears:        return "Larval Tears";
+    case Category::KeyScadutreeFragments: return "Scadutree Fragments";
+    case Category::KeyGreatRunes:         return "Great Runes";
+    case Category::KeyLostAshes:          return "Lost Ashes";
+    case Category::KeyPotsNPerfumes:      return "Pots & Perfumes";
+    case Category::KeySeedsTears:         return "Seeds & Tears";
+    case Category::KeyWhetblades:         return "Whetblades";
+    case Category::LootAmmo:              return "Ammo";
+    case Category::LootBellBearings:      return "Bell Bearings";
+    case Category::LootConsumables:       return "Consumables";
+    case Category::LootCraftingMaterials: return "Crafting Materials";
+    case Category::LootMPFingers:         return "MP Fingers";
+    case Category::LootMaterialNodes:     return "Material Nodes";
+    case Category::LootMerchantBellBearings: return "Merchant Bell Bearings";
+    case Category::LootReusables:         return "Reusables";
+    case Category::LootSmithingStones:    return "Smithing Stones";
+    case Category::LootSmithingStonesLow: return "Smithing Stones (Low)";
+    case Category::LootSmithingStonesRare: return "Ancient Dragon Smithing";
+    case Category::LootGoldenRunes:       return "Golden Runes";
+    case Category::LootGoldenRunesLow:    return "Golden Runes (Low)";
+    case Category::LootStoneswordKeys:    return "Stonesword Keys";
+    case Category::LootThrowables:        return "Throwables";
+    case Category::LootPrattlingPates:    return "Prattling Pates";
+    case Category::LootRuneArcs:          return "Rune Arcs";
+    case Category::LootDragonHearts:      return "Dragon Hearts";
+    case Category::LootGloveworts:        return "Gloveworts";
+    case Category::LootGreatGloveworts:   return "Great Gloveworts";
+    case Category::LootGestures:          return "Gestures";
+    case Category::LootGreases:           return "Greases";
+    case Category::LootUtilities:         return "Utilities";
+    case Category::LootStatBoosts:        return "Stat Boosts";
+    case Category::ReforgedFortunes:      return "Fortunes";
+    case Category::WorldHostileNPC:       return "Hostile NPC";
+    case Category::MagicIncantations:     return "Incantations";
+    case Category::MagicMemoryStones:     return "Memory Stones";
+    case Category::MagicPrayerbooks:      return "Prayerbooks";
+    case Category::MagicSorceries:        return "Sorceries";
+    case Category::WorldBosses:           return "Bosses";
+    case Category::QuestDeathroot:        return "Deathroot";
+    case Category::QuestProgression:      return "Quest Progression";
+    case Category::QuestSeedbedCurses:    return "Seedbed Curses";
+    case Category::ReforgedEmberPieces:   return "Ember Pieces";
+    case Category::ReforgedItemsAndChanges: return "Items & Changes";
+    case Category::ReforgedRunePieces:    return "Rune Pieces";
+    case Category::WorldGraces:           return "Graces";
+    case Category::WorldImpStatues:       return "Imp Statues";
+    case Category::WorldMaps:             return "World Maps";
+    case Category::WorldPaintings:        return "Paintings";
+    case Category::WorldSpiritSprings:    return "Spirit Springs";
+    case Category::WorldSpiritspringHawks: return "Spiritspring Hawks";
+    case Category::WorldStakesOfMarika:   return "Stakes of Marika";
+    case Category::WorldSummoningPools:   return "Summoning Pools";
+    case Category::WorldKindlingSpirits:  return "Kindling Spirits";
+    case Category::WorldInteractables:    return "Interactables";
+    default:                              return "Unknown";
+    }
+}
+
+// ── Items tab: full browsable table with sort + category filter ──
+static int s_items_sort_col = 0;  // 0=Name 1=Category 2=Location 3=Coords 4=Status
+static bool s_items_sort_asc = true;
+static int  s_items_cat_filter = -1; // -1 = all
+static char s_items_query[128] = {};
+static int32_t s_items_pinned_text1 = 0;
+
+struct ItemsTableEntry
+{
+    const SearchEntry *se;
+    bool collected;
+};
+
+static std::vector<ItemsTableEntry> s_items_sorted;
+static bool s_items_dirty = true;
+
+static void rebuild_items_table()
+{
+    s_items_sorted.clear();
+    char ql[128] = {};
+    const size_t qlen = std::strlen(s_items_query);
+    for (size_t k = 0; k <= qlen; ++k)
+        ql[k] = static_cast<char>(std::tolower(static_cast<unsigned char>(s_items_query[k])));
+
+    for (const SearchEntry &se : g_search_index)
+    {
+        if (s_items_cat_filter >= 0 &&
+            static_cast<int>(se.category) != s_items_cat_filter)
+            continue;
+        if (qlen >= 2 && se.name_lower.find(ql) == std::string::npos)
+            continue;
+        bool coll = goblin::collected::is_row_collected(se.row_id) ||
+                    goblin::kindling::is_row_collected(se.row_id);
+        s_items_sorted.push_back({&se, coll});
+    }
+
+    std::stable_sort(s_items_sorted.begin(), s_items_sorted.end(),
+        [](const ItemsTableEntry &a, const ItemsTableEntry &b)
+        {
+            int cmp = 0;
+            switch (s_items_sort_col)
+            {
+            case 0: cmp = a.se->name_utf8.compare(b.se->name_utf8); break;
+            case 1: cmp = std::strcmp(category_label(a.se->category),
+                                      category_label(b.se->category)); break;
+            case 2: cmp = a.se->loc_utf8.compare(b.se->loc_utf8); break;
+            case 3: cmp = (a.se->posX < b.se->posX) ? -1 : (a.se->posX > b.se->posX) ? 1 : 0; break;
+            case 4: cmp = (int)a.collected - (int)b.collected; break;
+            default: break;
+            }
+            return s_items_sort_asc ? cmp < 0 : cmp > 0;
+        });
+    s_items_dirty = false;
+}
+
+void draw_items_tab()
+{
+    namespace tr = goblin::i18n;
+    const tr::Language lang = tr::current_language();
+
+    if (!g_search_index_built)
+        build_search_index();
+
+    // Filter row: category dropdown + search box
+    static char s_last_items_query[128] = {};
+    static int  s_last_cat_filter = -2;
+
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::BeginCombo("##items_cat", s_items_cat_filter < 0
+                          ? tr::tr(tr::TextId::ItemsFilterAll, lang)
+                          : category_label(static_cast<goblin::generated::Category>(s_items_cat_filter))))
+    {
+        if (ImGui::Selectable(tr::tr(tr::TextId::ItemsFilterAll, lang), s_items_cat_filter < 0))
+        {
+            s_items_cat_filter = -1;
+            s_items_dirty = true;
+        }
+        // Enumerate unique categories present in the index
+        using goblin::generated::Category;
+        static const Category ALL_CATS[] = {
+            Category::EquipArmaments, Category::EquipArmour, Category::EquipAshesOfWar,
+            Category::EquipSpirits, Category::EquipTalismans,
+            Category::KeyCelestialDew, Category::KeyCookbooks, Category::KeyCrystalTears,
+            Category::KeyImbuedSwordKeys, Category::KeyLarvalTears, Category::KeyScadutreeFragments,
+            Category::KeyGreatRunes, Category::KeyLostAshes, Category::KeyPotsNPerfumes,
+            Category::KeySeedsTears, Category::KeyWhetblades,
+            Category::LootAmmo, Category::LootBellBearings, Category::LootConsumables,
+            Category::LootCraftingMaterials, Category::LootMPFingers, Category::LootMaterialNodes,
+            Category::LootMerchantBellBearings, Category::LootReusables,
+            Category::LootSmithingStones, Category::LootSmithingStonesLow, Category::LootSmithingStonesRare,
+            Category::LootGoldenRunes, Category::LootGoldenRunesLow, Category::LootStoneswordKeys,
+            Category::LootThrowables, Category::LootPrattlingPates, Category::LootRuneArcs,
+            Category::LootDragonHearts, Category::LootGloveworts, Category::LootGreatGloveworts,
+            Category::LootGestures, Category::LootGreases, Category::LootUtilities, Category::LootStatBoosts,
+            Category::ReforgedFortunes, Category::ReforgedEmberPieces, Category::ReforgedItemsAndChanges,
+            Category::ReforgedRunePieces,
+            Category::WorldHostileNPC, Category::WorldBosses,
+            Category::MagicIncantations, Category::MagicMemoryStones, Category::MagicPrayerbooks, Category::MagicSorceries,
+            Category::QuestDeathroot, Category::QuestProgression, Category::QuestSeedbedCurses,
+            Category::WorldGraces, Category::WorldImpStatues, Category::WorldMaps, Category::WorldPaintings,
+            Category::WorldSpiritSprings, Category::WorldSpiritspringHawks, Category::WorldStakesOfMarika,
+            Category::WorldSummoningPools, Category::WorldKindlingSpirits, Category::WorldInteractables,
+        };
+        for (Category c : ALL_CATS)
+        {
+            const int ci = static_cast<int>(c);
+            bool sel = (s_items_cat_filter == ci);
+            if (ImGui::Selectable(category_label(c), sel))
+            {
+                s_items_cat_filter = ci;
+                s_items_dirty = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
+                            ImGui::CalcTextSize(tr::tr(tr::TextId::SearchClear, lang)).x -
+                            ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
+    if (ImGui::InputTextWithHint("##items_search", tr::tr(tr::TextId::SearchPlaceholder, lang),
+                                 s_items_query, sizeof(s_items_query)))
+        s_items_dirty = true;
+    ImGui::SameLine();
+    if (ImGui::Button(tr::tr(tr::TextId::SearchClear, lang)))
+    {
+        s_items_query[0] = '\0';
+        s_items_dirty = true;
+        if (s_items_pinned_text1 != 0) { s_items_pinned_text1 = 0; goblin::set_search_filter(0); }
+    }
+
+    if (s_items_dirty)
+        rebuild_items_table();
+
+    char count_buf[64];
+    std::snprintf(count_buf, sizeof count_buf,
+                  tr::tr(tr::TextId::ItemsCount, lang),
+                  static_cast<int>(s_items_sorted.size()));
+    ImGui::TextDisabled("%s", count_buf);
+
+    const ImGuiTableFlags tflags =
+        ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV |
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+        ImGuiTableFlags_Sortable | ImGuiTableFlags_SortMulti |
+        ImGuiTableFlags_Resizable | ImGuiTableFlags_Hideable;
+
+    if (!ImGui::BeginTable("##items_table", 5, tflags,
+                           ImVec2(0, ImGui::GetContentRegionAvail().y)))
+        return;
+
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn(tr::tr(tr::TextId::ItemsColName,     lang), ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch, 0.35f);
+    ImGui::TableSetupColumn(tr::tr(tr::TextId::ItemsColCategory, lang), ImGuiTableColumnFlags_WidthStretch, 0.20f);
+    ImGui::TableSetupColumn(tr::tr(tr::TextId::ItemsColLocation, lang), ImGuiTableColumnFlags_WidthStretch, 0.20f);
+    ImGui::TableSetupColumn(tr::tr(tr::TextId::ItemsColCoords,   lang), ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    ImGui::TableSetupColumn(tr::tr(tr::TextId::ItemsColStatus,   lang), ImGuiTableColumnFlags_WidthFixed, 75.0f);
+    ImGui::TableHeadersRow();
+
+    // Handle sort specs
+    if (ImGuiTableSortSpecs *specs = ImGui::TableGetSortSpecs())
+    {
+        if (specs->SpecsDirty && specs->SpecsCount > 0)
+        {
+            s_items_sort_col = specs->Specs[0].ColumnIndex;
+            s_items_sort_asc = (specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending);
+            s_items_dirty = true;
+            specs->SpecsDirty = false;
+            if (s_items_dirty)
+                rebuild_items_table();
+        }
+    }
+
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(s_items_sorted.size()));
+    while (clipper.Step())
+    {
+        for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+        {
+            const ItemsTableEntry &ite = s_items_sorted[static_cast<size_t>(row)];
+            const SearchEntry *se = ite.se;
+            ImGui::TableNextRow();
+            ImGui::PushID(row);
+
+            bool selected = (s_items_pinned_text1 != 0 && se->baked_text1 == s_items_pinned_text1);
+
+            // Col 0: Name (selectable)
+            ImGui::TableSetColumnIndex(0);
+            if (ImGui::Selectable(se->name_utf8.c_str(), selected,
+                                  ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                                  ImVec2(0, 0)))
+            {
+                if (selected) { s_items_pinned_text1 = 0; goblin::set_search_filter(0); }
+                else          { s_items_pinned_text1 = se->baked_text1; goblin::set_search_filter(se->baked_text1); }
+            }
+
+            // Col 1: Category
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(category_label(se->category));
+
+            // Col 2: Location
+            ImGui::TableSetColumnIndex(2);
+            if (!se->loc_utf8.empty())
+                ImGui::TextUnformatted(se->loc_utf8.c_str());
+            else
+                ImGui::TextDisabled("—");
+
+            // Col 3: Coords
+            ImGui::TableSetColumnIndex(3);
+            char coord_buf[32];
+            std::snprintf(coord_buf, sizeof coord_buf, "%.0f / %.0f", se->posX, se->posZ);
+            ImGui::TextUnformatted(coord_buf);
+
+            // Col 4: Status
+            ImGui::TableSetColumnIndex(4);
+            if (ite.collected)
+                ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f),
+                                   "%s", tr::tr(tr::TextId::ItemsStatusCollected, lang));
+            else
+                ImGui::TextDisabled("%s", tr::tr(tr::TextId::ItemsStatusAvailable, lang));
+
+            ImGui::PopID();
+        }
+    }
+    clipper.End();
+    ImGui::EndTable();
 }
 
 void draw_search_tab()
@@ -985,8 +1288,8 @@ void draw_settings_window()
     {
         const bool lb = (g_pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
         const bool rb = (g_pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-        if (rb && !prev_rb) { cur_tab = (cur_tab + 1) % 4; forced_tab = cur_tab; }
-        if (lb && !prev_lb) { cur_tab = (cur_tab + 3) % 4; forced_tab = cur_tab; }
+        if (rb && !prev_rb) { cur_tab = (cur_tab + 1) % 5; forced_tab = cur_tab; }
+        if (lb && !prev_lb) { cur_tab = (cur_tab + 4) % 5; forced_tab = cur_tab; }
         prev_lb = lb; prev_rb = rb;
     }
     auto tab_flag = [&](int i) {
@@ -1012,8 +1315,18 @@ void draw_settings_window()
         {
             goblin::set_search_filter(0);
         }
-        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabDebug,    lang), nullptr, tab_flag(2))) { draw_debug_tab();    ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabAbout,    lang), nullptr, tab_flag(3))) { draw_about_tab();    ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabItems,    lang), nullptr, tab_flag(2)))
+        {
+            draw_items_tab();
+            ImGui::EndTabItem();
+        }
+        else if (s_items_pinned_text1 != 0)
+        {
+            s_items_pinned_text1 = 0;
+            goblin::set_search_filter(0);
+        }
+        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabDebug,    lang), nullptr, tab_flag(3))) { draw_debug_tab();    ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabAbout,    lang), nullptr, tab_flag(4))) { draw_about_tab();    ImGui::EndTabItem(); }
 
         ImGui::EndTabBar();
     }

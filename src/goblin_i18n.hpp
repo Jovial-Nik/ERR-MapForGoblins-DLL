@@ -57,6 +57,16 @@ namespace goblin::i18n
         SearchNoResults,
         SearchClear,
         SearchCoords,
+        TabItems,
+        ItemsColName,
+        ItemsColCategory,
+        ItemsColLocation,
+        ItemsColCoords,
+        ItemsColStatus,
+        ItemsStatusCollected,
+        ItemsStatusAvailable,
+        ItemsFilterAll,
+        ItemsCount,
     };
 
     enum class ToastId
