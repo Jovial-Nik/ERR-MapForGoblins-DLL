@@ -116,6 +116,11 @@ bool g_os_cursor = false; // OS hardware cursor visible (e.g. in-game map open)
 struct KeyEv { ImGuiKey key; bool down; };
 std::mutex g_key_mtx;
 std::vector<KeyEv> g_key_events;
+// WM_CHAR text -> ImGui, marshaled the same way as keys. Calling AddInputCharacter
+// straight from the message thread races NewFrame's input-queue processing on the
+// render thread (both touch ImGui's shared g.InputEventsQueue), which drops typed
+// characters - the InputText then refuses input. Queue here, drain in feed_input().
+std::vector<unsigned int> g_char_events;
 
 struct FrameContext
 {
@@ -1359,7 +1364,10 @@ LRESULT CALLBACK hkWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
         case WM_CHAR:
             if (wParam >= 0x20 && wParam != 0x7F) // printable, not DEL
-                ImGui::GetIO().AddInputCharacter(static_cast<unsigned int>(wParam));
+            {
+                std::lock_guard<std::mutex> lk(g_key_mtx);
+                g_char_events.push_back(static_cast<unsigned int>(wParam));
+            }
             return 0;
         case WM_KEYDOWN: case WM_KEYUP:
         case WM_SYSKEYDOWN: case WM_SYSKEYUP:
@@ -1589,6 +1597,9 @@ void feed_input()
         for (const auto &e : g_key_events)
             io.AddKeyEvent(e.key, e.down);
         g_key_events.clear();
+        for (unsigned int c : g_char_events)
+            io.AddInputCharacter(c);
+        g_char_events.clear();
     }
 
     // gamepad -> ImGui nav (real state from the XInput hook; the game's own read
