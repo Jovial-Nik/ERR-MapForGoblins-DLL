@@ -61,6 +61,11 @@ namespace goblin
     void set_icons_hidden(bool hidden);
     bool icons_hidden();
 
+    // Search-tab map filter: hide all markers except those whose baked textId1
+    // matches the selected item. Pass 0 to clear. Calls apply_category_visibility.
+    void set_search_filter(int32_t baked_text1);
+    bool has_search_filter();
+
     // Codex-toast ids, allocated DYNAMICALLY at runtime above the live max so they
     // never collide with an overhaul's / another mod's tutorial content (same
     // principle as the marker textId remap). Two independent id spaces:

@@ -73,6 +73,7 @@ struct CategoryRow
     unsigned baked_cleared;  // clearedEventFlagId as baked (for live hide_killed_bosses)
     unsigned baked_dis1;     // textDisableFlagId1 as baked
     unsigned baked_dis2;     // textDisableFlagId2 as baked
+    int32_t  baked_text1;    // textId1 as baked (item-name slot; 0 if not an item row)
 };
 
 // textEnableFlagId1..8 of a row, as a pointer array (the paramdef has them as
@@ -177,7 +178,8 @@ const goblin::generated::ItemIcon *lookup_item_icon(int32_t key)
 // explicitly hidden the icons, so the auto-toggle must keep the table vanilla
 // even while the world map is open. Shared between the hotkey and watcher
 // threads; a lone bool flag is fine, but use atomic for correctness.
-static std::atomic<bool> g_icons_user_disabled{false};
+static std::atomic<bool>    g_icons_user_disabled{false};
+static std::atomic<int32_t> g_search_filter_text1{0}; // 0 = no filter
 
 struct WrapperRowLocator
 {
@@ -514,6 +516,7 @@ void goblin::inject_map_entries()
             cr.baked_cleared = wp->clearedEventFlagId;
             cr.baked_dis1 = wp->textDisableFlagId1;
             cr.baked_dis2 = wp->textDisableFlagId2;
+            cr.baked_text1 = wp->textId1;
             unsigned *en[8];
             enable_flag_ptrs(wp, en);
             for (int k = 0; k < 8; ++k) cr.baked_enable[k] = *en[k];
@@ -968,9 +971,12 @@ static bool gamepad_combo_held()
 // from the refresh thread when the collected set changes. Idempotent.
 void goblin::apply_category_visibility()
 {
+    const int32_t filter = g_search_filter_text1.load();
     for (auto &cr : g_category_rows)
     {
-        bool show = is_category_enabled(cr.cat) &&
+        bool in_filter = (filter == 0) || (cr.baked_text1 == filter);
+        bool show = in_filter &&
+                    is_category_enabled(cr.cat) &&
                     !collected::is_row_collected(cr.row_id) &&
                     !kindling::is_row_collected(cr.row_id);
         unsigned *en[8];
@@ -1131,6 +1137,13 @@ void goblin::reapply_live_settings()
 
 void goblin::set_icons_hidden(bool hidden) { g_icons_user_disabled.store(hidden); }
 bool goblin::icons_hidden() { return g_icons_user_disabled.load(); }
+
+void goblin::set_search_filter(int32_t baked_text1)
+{
+    g_search_filter_text1.store(baked_text1);
+    apply_category_visibility();
+}
+bool goblin::has_search_filter() { return g_search_filter_text1.load() != 0; }
 
 void goblin::toggle_hotkey_loop()
 {

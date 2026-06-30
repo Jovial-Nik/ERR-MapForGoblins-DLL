@@ -733,6 +733,7 @@ struct SearchEntry
     std::string loc_utf8;
     float posX = 0.0f, posZ = 0.0f;
     uint8_t area_no = 0;
+    int32_t baked_text1 = 0;
 };
 
 std::vector<SearchEntry> g_search_index;
@@ -779,7 +780,8 @@ static void build_search_index()
 
         g_search_index.push_back({std::move(name_utf8), std::move(name_lower),
                                   std::move(loc_utf8),
-                                  e.data.posX, e.data.posZ, e.data.areaNo});
+                                  e.data.posX, e.data.posZ, e.data.areaNo,
+                                  tid1});
     }
     g_search_index_built = true;
 }
@@ -795,6 +797,7 @@ void draw_search_tab()
     static char s_query[128] = {};
     static std::vector<const SearchEntry *> s_results;
     static char s_last_query[128] = {};
+    static int32_t s_pinned_text1 = 0; // baked textId1 of selected item (0 = none)
 
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
                             ImGui::CalcTextSize(tr::tr(tr::TextId::SearchClear, lang)).x -
@@ -806,6 +809,7 @@ void draw_search_tab()
     {
         s_query[0] = '\0';
         changed = true;
+        if (s_pinned_text1 != 0) { s_pinned_text1 = 0; goblin::set_search_filter(0); }
     }
 
     if (changed || std::strcmp(s_query, s_last_query) != 0)
@@ -857,21 +861,30 @@ void draw_search_tab()
         const SearchEntry *se = s_results[i];
         ImGui::PushID(static_cast<int>(i));
 
-        // Item name in default text colour.
-        ImGui::TextUnformatted(se->name_utf8.c_str());
-
-        // Location + coordinates on the same line (dimmed).
-        ImGui::SameLine();
+        bool selected = (s_pinned_text1 != 0 && se->baked_text1 == s_pinned_text1);
         char coord_buf[64];
         std::snprintf(coord_buf, sizeof coord_buf,
                       tr::tr(tr::TextId::SearchCoords, lang), se->posX, se->posZ);
+        char label[512];
         if (!se->loc_utf8.empty())
-        {
-            ImGui::TextDisabled("— %s  %s", se->loc_utf8.c_str(), coord_buf);
-        }
+            std::snprintf(label, sizeof label, "%s — %s  %s",
+                          se->name_utf8.c_str(), se->loc_utf8.c_str(), coord_buf);
         else
+            std::snprintf(label, sizeof label, "%s — %s",
+                          se->name_utf8.c_str(), coord_buf);
+
+        if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_None))
         {
-            ImGui::TextDisabled("— %s", coord_buf);
+            if (selected)
+            {
+                s_pinned_text1 = 0;
+                goblin::set_search_filter(0);
+            }
+            else
+            {
+                s_pinned_text1 = se->baked_text1;
+                goblin::set_search_filter(se->baked_text1);
+            }
         }
 
         ImGui::PopID();
@@ -990,7 +1003,15 @@ void draw_settings_window()
     if (ImGui::BeginTabBar("##tabs"))
     {
         if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabSettings, lang), nullptr, tab_flag(0))) { draw_settings_tab(); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabSearch,   lang), nullptr, tab_flag(1))) { draw_search_tab();   ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabSearch,   lang), nullptr, tab_flag(1)))
+        {
+            draw_search_tab();
+            ImGui::EndTabItem();
+        }
+        else if (goblin::has_search_filter())
+        {
+            goblin::set_search_filter(0);
+        }
         if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabDebug,    lang), nullptr, tab_flag(2))) { draw_debug_tab();    ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabAbout,    lang), nullptr, tab_flag(3))) { draw_about_tab();    ImGui::EndTabItem(); }
 
@@ -1960,6 +1981,7 @@ HRESULT WINAPI hkPresent(IDXGISwapChain3 *sc, UINT sync, UINT flags)
     if (open_now && !prev_open)
     {
         g_need_center = true;
+        g_raw_btn.store(0);  // discard any click held at the moment of opening
         goblin::load_config(goblin::g_ini_path);
         goblin::reapply_live_settings();
     }
