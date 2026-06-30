@@ -30,6 +30,8 @@
 #include "miniz.h"              // zlib inflate to decode the tags
 #include "goblin_inject.hpp"
 #include "goblin_markers.hpp"
+#include "goblin_messages.hpp"
+#include "goblin_map_data.hpp"
 #include "goblin_map_timing.hpp"
 #include "goblin_gfx_probe.hpp"
 #include "goblin_diag.hpp"
@@ -722,6 +724,164 @@ void draw_debug_tab()
     }
 }
 
+// ── Search tab: find item locations by name ──
+
+struct SearchEntry
+{
+    std::string name_utf8;
+    std::string name_lower;
+    std::string loc_utf8;
+    float posX = 0.0f, posZ = 0.0f;
+    uint8_t area_no = 0;
+};
+
+std::vector<SearchEntry> g_search_index;
+bool g_search_index_built = false;
+
+static std::string wcs_to_utf8(const wchar_t *ws)
+{
+    if (!ws || !ws[0]) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, ws, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string s(static_cast<size_t>(n - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws, -1, s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+static void build_search_index()
+{
+    using namespace goblin::generated;
+    g_search_index.clear();
+    for (size_t i = 0; i < MAP_ENTRY_COUNT; ++i)
+    {
+        const MapEntry &e = MAP_ENTRIES[i];
+        const int32_t tid1 = e.data.textId1;
+        if (tid1 <= 0) continue;
+
+        const wchar_t *wname = goblin::lookup_text(goblin::remap_textid(tid1));
+        if (!wname || !wname[0]) continue;
+
+        std::string name_utf8 = wcs_to_utf8(wname);
+        if (name_utf8.empty()) continue;
+
+        std::string name_lower = name_utf8;
+        for (char &c : name_lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        // Secondary location label from textId2 or textId3 (whichever is set).
+        std::string loc_utf8;
+        for (int32_t tid : {e.data.textId2, e.data.textId3})
+        {
+            if (tid <= 0) continue;
+            const wchar_t *wloc = goblin::lookup_text(goblin::remap_textid(tid));
+            if (wloc && wloc[0]) { loc_utf8 = wcs_to_utf8(wloc); break; }
+        }
+
+        g_search_index.push_back({std::move(name_utf8), std::move(name_lower),
+                                  std::move(loc_utf8),
+                                  e.data.posX, e.data.posZ, e.data.areaNo});
+    }
+    g_search_index_built = true;
+}
+
+void draw_search_tab()
+{
+    namespace tr = goblin::i18n;
+    const tr::Language lang = tr::current_language();
+
+    if (!g_search_index_built)
+        build_search_index();
+
+    static char s_query[128] = {};
+    static std::vector<const SearchEntry *> s_results;
+    static char s_last_query[128] = {};
+
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
+                            ImGui::CalcTextSize(tr::tr(tr::TextId::SearchClear, lang)).x -
+                            ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
+    bool changed = ImGui::InputTextWithHint("##search", tr::tr(tr::TextId::SearchPlaceholder, lang),
+                                            s_query, sizeof(s_query));
+    ImGui::SameLine();
+    if (ImGui::Button(tr::tr(tr::TextId::SearchClear, lang)))
+    {
+        s_query[0] = '\0';
+        changed = true;
+    }
+
+    if (changed || std::strcmp(s_query, s_last_query) != 0)
+    {
+        std::strcpy(s_last_query, s_query);
+        s_results.clear();
+        const size_t qlen = std::strlen(s_query);
+        if (qlen >= 2)
+        {
+            // Lowercase query for case-insensitive match.
+            char ql[128];
+            for (size_t k = 0; k <= qlen; ++k)
+                ql[k] = static_cast<char>(std::tolower(static_cast<unsigned char>(s_query[k])));
+
+            for (const SearchEntry &se : g_search_index)
+            {
+                if (se.name_lower.find(ql) != std::string::npos)
+                    s_results.push_back(&se);
+            }
+        }
+    }
+
+    const size_t qlen = std::strlen(s_query);
+    if (qlen == 0)
+    {
+        ImGui::TextDisabled("%s", tr::tr(tr::TextId::SearchTooShort, lang));
+    }
+    else if (qlen < 2)
+    {
+        ImGui::TextDisabled("%s", tr::tr(tr::TextId::SearchTooShort, lang));
+    }
+    else if (s_results.empty())
+    {
+        ImGui::TextDisabled("%s", tr::tr(tr::TextId::SearchNoResults, lang));
+    }
+    else
+    {
+        ImGui::TextDisabled("%d %s", static_cast<int>(s_results.size()),
+                            tr::tr(tr::TextId::SearchResultCount, lang));
+    }
+
+    ImGui::BeginChild("##search_results", ImVec2(0, 0), ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_None);
+
+    constexpr size_t MAX_RESULTS = 200;
+    const size_t show_count = s_results.size() < MAX_RESULTS ? s_results.size() : MAX_RESULTS;
+    for (size_t i = 0; i < show_count; ++i)
+    {
+        const SearchEntry *se = s_results[i];
+        ImGui::PushID(static_cast<int>(i));
+
+        // Item name in default text colour.
+        ImGui::TextUnformatted(se->name_utf8.c_str());
+
+        // Location + coordinates on the same line (dimmed).
+        ImGui::SameLine();
+        char coord_buf[64];
+        std::snprintf(coord_buf, sizeof coord_buf,
+                      tr::tr(tr::TextId::SearchCoords, lang), se->posX, se->posZ);
+        if (!se->loc_utf8.empty())
+        {
+            ImGui::TextDisabled("— %s  %s", se->loc_utf8.c_str(), coord_buf);
+        }
+        else
+        {
+            ImGui::TextDisabled("— %s", coord_buf);
+        }
+
+        ImGui::PopID();
+    }
+    if (s_results.size() > MAX_RESULTS)
+        ImGui::TextDisabled("(showing first %zu of %zu)", MAX_RESULTS, s_results.size());
+
+    ImGui::EndChild();
+}
+
 // ── About tab: version + links ──
 void draw_about_tab()
 {
@@ -812,8 +972,8 @@ void draw_settings_window()
     {
         const bool lb = (g_pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
         const bool rb = (g_pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-        if (rb && !prev_rb) { cur_tab = (cur_tab + 1) % 3; forced_tab = cur_tab; }
-        if (lb && !prev_lb) { cur_tab = (cur_tab + 2) % 3; forced_tab = cur_tab; }
+        if (rb && !prev_rb) { cur_tab = (cur_tab + 1) % 4; forced_tab = cur_tab; }
+        if (lb && !prev_lb) { cur_tab = (cur_tab + 3) % 4; forced_tab = cur_tab; }
         prev_lb = lb; prev_rb = rb;
     }
     auto tab_flag = [&](int i) {
@@ -830,8 +990,9 @@ void draw_settings_window()
     if (ImGui::BeginTabBar("##tabs"))
     {
         if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabSettings, lang), nullptr, tab_flag(0))) { draw_settings_tab(); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabDebug, lang),    nullptr, tab_flag(1))) { draw_debug_tab();    ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabAbout, lang),    nullptr, tab_flag(2))) { draw_about_tab();    ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabSearch,   lang), nullptr, tab_flag(1))) { draw_search_tab();   ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabDebug,    lang), nullptr, tab_flag(2))) { draw_debug_tab();    ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabAbout,    lang), nullptr, tab_flag(3))) { draw_about_tab();    ImGui::EndTabItem(); }
 
         ImGui::EndTabBar();
     }

@@ -35,7 +35,14 @@
     "Close": "關閉",
     "TabSettings": "設定",
     "TabDebug": "偵錯",
-    "TabAbout": "關於"
+    "TabAbout": "關於",
+    "TabSearch": "搜尋",
+    "SearchPlaceholder": "搜尋物品…",
+    "SearchResultCount": "筆結果",
+    "SearchTooShort": "請輸入至少 2 個字元以搜尋。",
+    "SearchNoResults": "未找到物品。",
+    "SearchClear": "清除",
+    "SearchCoords": "X: %.0f  Z: %.0f"
   },
   "toasts": {
     "MapIconsOn": "地圖圖示：開啟",

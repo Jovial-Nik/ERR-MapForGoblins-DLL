@@ -50,6 +50,13 @@ namespace goblin::i18n
         TabSettings,
         TabDebug,
         TabAbout,
+        TabSearch,
+        SearchPlaceholder,
+        SearchResultCount,
+        SearchTooShort,
+        SearchNoResults,
+        SearchClear,
+        SearchCoords,
     };
 
     enum class ToastId

@@ -35,7 +35,14 @@
     "Close": "关闭",
     "TabSettings": "设置",
     "TabDebug": "调试",
-    "TabAbout": "关于"
+    "TabAbout": "关于",
+    "TabSearch": "搜索",
+    "SearchPlaceholder": "搜索物品…",
+    "SearchResultCount": "条结果",
+    "SearchTooShort": "请输入至少 2 个字符以搜索。",
+    "SearchNoResults": "未找到物品。",
+    "SearchClear": "清除",
+    "SearchCoords": "X: %.0f  Z: %.0f"
   },
   "toasts": {
     "MapIconsOn": "地图图标：开启",
