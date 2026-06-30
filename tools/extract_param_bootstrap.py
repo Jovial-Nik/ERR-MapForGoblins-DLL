@@ -22,7 +22,17 @@ import json
 import tempfile
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
+import shutil
 import config
+
+# SoulsFormats needs oo2core_6_win64.dll discoverable as a native DLL.
+# Copy it from game_dir into the assembly directory so .NET P/Invoke finds it.
+if config.OO2CORE_DLL and config.OO2CORE_DLL.exists():
+    for _dst_dir in [config.LIB_DIR, tempfile.gettempdir(), os.getcwd()]:
+        _dst = os.path.join(str(_dst_dir), "oo2core_6_win64.dll")
+        if not os.path.exists(_dst):
+            shutil.copy2(str(config.OO2CORE_DLL), _dst)
+
 from pythonnet import load as _pyload
 _pyload('coreclr')
 from System.Reflection import Assembly
