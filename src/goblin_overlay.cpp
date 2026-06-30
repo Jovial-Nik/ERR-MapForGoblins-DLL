@@ -100,6 +100,7 @@ std::atomic<int> g_raw_dx{0};
 std::atomic<int> g_raw_dy{0};
 std::atomic<int> g_raw_wheel{0};
 std::atomic<uint32_t> g_raw_btn{0}; // bit0=L bit1=R bit2=M (current state)
+std::atomic<int> g_suppress_click_frames{0}; // suppress mouse clicks on open to avoid focus steal
 
 // Key-state table fed from input we ALREADY intercept (raw input in
 // hkGetRawInputData + WM_KEY* in hkWndProc). Lets hotkeys be read WITHOUT
@@ -1564,9 +1565,20 @@ void feed_input()
     }
     io.AddMousePosEvent(g_mouse_x, g_mouse_y);
     const uint32_t b = g_raw_btn.load();
-    io.AddMouseButtonEvent(0, (b & 1u) != 0);
-    io.AddMouseButtonEvent(1, (b & 2u) != 0);
-    io.AddMouseButtonEvent(2, (b & 4u) != 0);
+    const int suppress = g_suppress_click_frames.load();
+    if (suppress > 0)
+    {
+        g_suppress_click_frames.store(suppress - 1);
+        io.AddMouseButtonEvent(0, false);
+        io.AddMouseButtonEvent(1, false);
+        io.AddMouseButtonEvent(2, false);
+    }
+    else
+    {
+        io.AddMouseButtonEvent(0, (b & 1u) != 0);
+        io.AddMouseButtonEvent(1, (b & 2u) != 0);
+        io.AddMouseButtonEvent(2, (b & 4u) != 0);
+    }
     const int w = g_raw_wheel.exchange(0, std::memory_order_relaxed);
     if (w != 0)
         io.AddMouseWheelEvent(0.0f, static_cast<float>(w) / static_cast<float>(WHEEL_DELTA));
@@ -2294,7 +2306,8 @@ HRESULT WINAPI hkPresent(IDXGISwapChain3 *sc, UINT sync, UINT flags)
     if (open_now && !prev_open)
     {
         g_need_center = true;
-        g_raw_btn.store(0);  // discard any click held at the moment of opening
+        g_raw_btn.store(0);
+        g_suppress_click_frames.store(3); // suppress for 3 frames to cover any race with game thread
         goblin::load_config(goblin::g_ini_path);
         goblin::reapply_live_settings();
     }
