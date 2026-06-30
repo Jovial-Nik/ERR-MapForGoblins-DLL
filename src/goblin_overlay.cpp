@@ -1022,7 +1022,11 @@ LRESULT CALLBACK hkWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         switch (msg)
         {
-        case WM_KEYDOWN: case WM_KEYUP: case WM_CHAR:
+        case WM_CHAR:
+            if (wParam >= 0x20 && wParam != 0x7F) // printable, not DEL
+                ImGui::GetIO().AddInputCharacter(static_cast<unsigned int>(wParam));
+            return 0;
+        case WM_KEYDOWN: case WM_KEYUP:
         case WM_SYSKEYDOWN: case WM_SYSKEYUP:
         case WM_MOUSEMOVE:
         case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
