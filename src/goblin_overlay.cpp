@@ -101,6 +101,14 @@ std::atomic<int> g_raw_dy{0};
 std::atomic<int> g_raw_wheel{0};
 std::atomic<uint32_t> g_raw_btn{0}; // bit0=L bit1=R bit2=M (current state)
 std::atomic<int> g_suppress_click_frames{0}; // suppress mouse clicks on open to avoid focus steal
+// Set for exactly one frame when the overlay reopens. We stop calling ImGui::NewFrame
+// entirely while closed, so ImGui's ActiveId/NavId for a text field freeze at whatever
+// they were - on reopen the field LOOKS focused (persisted NavId) but isn't ACTIVE
+// (not in text-edit mode), so typed characters are silently dropped until the user
+// clicks it again. Whichever tab is actually drawn this frame consumes the flag via
+// exchange(false) and calls SetKeyboardFocusHere() on its own search box to re-enter
+// edit mode immediately, without requiring an extra click.
+std::atomic<bool> g_just_reopened{false};
 
 // Key-state table fed from input we ALREADY intercept (raw input in
 // hkGetRawInputData + WM_KEY* in hkWndProc). Lets hotkeys be read WITHOUT
@@ -923,7 +931,7 @@ static void rebuild_items_table()
     s_items_dirty = false;
 }
 
-void draw_items_tab()
+void draw_items_tab(bool just_reopened)
 {
     namespace tr = goblin::i18n;
     const tr::Language lang = tr::current_language();
@@ -988,6 +996,11 @@ void draw_items_tab()
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
                             ImGui::CalcTextSize(tr::tr(tr::TextId::SearchClear, lang)).x -
                             ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
+    // Re-enter text-edit mode on reopen: ImGui freezes ActiveId/NavId while we skip
+    // NewFrame with the menu closed, so this field can come back merely "focused"
+    // (nav-highlighted) but not "active" (not accepting keystrokes) - see g_just_reopened.
+    if (just_reopened)
+        ImGui::SetKeyboardFocusHere();
     if (ImGui::InputTextWithHint("##items_search", tr::tr(tr::TextId::SearchPlaceholder, lang),
                                  s_items_query, sizeof(s_items_query)))
         s_items_dirty = true;
@@ -1095,7 +1108,7 @@ void draw_items_tab()
     ImGui::EndTable();
 }
 
-void draw_search_tab()
+void draw_search_tab(bool just_reopened)
 {
     namespace tr = goblin::i18n;
     const tr::Language lang = tr::current_language();
@@ -1111,6 +1124,11 @@ void draw_search_tab()
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
                             ImGui::CalcTextSize(tr::tr(tr::TextId::SearchClear, lang)).x -
                             ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
+    // Re-enter text-edit mode on reopen: ImGui freezes ActiveId/NavId while we skip
+    // NewFrame with the menu closed, so this field can come back merely "focused"
+    // (nav-highlighted) but not "active" (not accepting keystrokes) - see g_just_reopened.
+    if (just_reopened)
+        ImGui::SetKeyboardFocusHere();
     bool changed = ImGui::InputTextWithHint("##search", tr::tr(tr::TextId::SearchPlaceholder, lang),
                                             s_query, sizeof(s_query));
     // TEMP DIAGNOSTIC (remove once the reopen-typing bug is root-caused): log every
@@ -1317,6 +1335,10 @@ void draw_settings_window()
         return forced_tab == i ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
     };
 
+    // Consumed exactly once per reopen, by whichever tab actually draws this frame
+    // (see g_just_reopened for why this is needed).
+    const bool just_reopened = g_just_reopened.exchange(false);
+
     // Body fills all but a footer reserved for the control hints.
     const float footer_h = ImGui::GetTextLineHeightWithSpacing() + 8.0f;
     // NavFlattened here too: this outer child wraps the tab bar + content, so
@@ -1329,7 +1351,7 @@ void draw_settings_window()
         if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabSettings, lang), nullptr, tab_flag(0))) { draw_settings_tab(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabSearch,   lang), nullptr, tab_flag(1)))
         {
-            draw_search_tab();
+            draw_search_tab(just_reopened);
             ImGui::EndTabItem();
         }
         else if (goblin::has_search_filter())
@@ -1338,7 +1360,7 @@ void draw_settings_window()
         }
         if (ImGui::BeginTabItem(tr::tr(tr::TextId::TabItems,    lang), nullptr, tab_flag(2)))
         {
-            draw_items_tab();
+            draw_items_tab(just_reopened);
             ImGui::EndTabItem();
         }
         else if (s_items_pinned_text1 != 0)
@@ -2375,6 +2397,7 @@ HRESULT WINAPI hkPresent(IDXGISwapChain3 *sc, UINT sync, UINT flags)
         g_need_center = true;
         g_raw_btn.store(0);
         g_suppress_click_frames.store(3); // suppress for 3 frames to cover any race with game thread
+        g_just_reopened.store(true); // let the active tab re-enter text-edit mode on its search box
         goblin::load_config(goblin::g_ini_path);
         goblin::reapply_live_settings();
     }
