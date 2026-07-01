@@ -1113,6 +1113,21 @@ void draw_search_tab()
                             ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
     bool changed = ImGui::InputTextWithHint("##search", tr::tr(tr::TextId::SearchPlaceholder, lang),
                                             s_query, sizeof(s_query));
+    // TEMP DIAGNOSTIC (remove once the reopen-typing bug is root-caused): log every
+    // active/focus transition on this widget so a repro can be matched against the
+    // key/char event counts logged in feed_input().
+    {
+        static bool s_was_active = false, s_was_focused = false;
+        const bool active = ImGui::IsItemActive();
+        const bool focusedw = ImGui::IsItemFocused();
+        if (active != s_was_active || focusedw != s_was_focused)
+        {
+            spdlog::info("[OVERLAY][DIAG] search box active={} focused={} WantTextInput={} WantCaptureKeyboard={}",
+                         active, focusedw, ImGui::GetIO().WantTextInput, ImGui::GetIO().WantCaptureKeyboard);
+            s_was_active = active;
+            s_was_focused = focusedw;
+        }
+    }
     ImGui::SameLine();
     if (ImGui::Button(tr::tr(tr::TextId::SearchClear, lang)))
     {
@@ -1598,6 +1613,10 @@ void feed_input()
         io.AddMouseButtonEvent(0, false);
         io.AddMouseButtonEvent(1, false);
         io.AddMouseButtonEvent(2, false);
+        // TEMP DIAGNOSTIC: flag if a real click was in flight while we forced it off -
+        // that's exactly the spurious-defocus-click scenario the counter exists to avoid.
+        if (b != 0)
+            spdlog::info("[OVERLAY][DIAG] suppressing real mouse btn=0x{:x} ({} frame(s) left)", b, suppress);
     }
     else
     {
@@ -1612,6 +1631,25 @@ void feed_input()
     // keyboard events captured on the message thread (for Ctrl+A / Ctrl+C etc.)
     {
         std::lock_guard<std::mutex> lk(g_key_mtx);
+        // TEMP DIAGNOSTIC (remove once the reopen-typing bug is root-caused): log every
+        // batch drained this frame, so a repro log shows exactly what ImGui received.
+        if (!g_key_events.empty() || !g_char_events.empty())
+        {
+            std::string keys_s, chars_s;
+            char buf[32];
+            for (const auto &e : g_key_events)
+            {
+                std::snprintf(buf, sizeof buf, "%d:%d ", static_cast<int>(e.key), e.down ? 1 : 0);
+                keys_s += buf;
+            }
+            for (unsigned int c : g_char_events)
+            {
+                const char ch = (c >= 0x20 && c < 0x7F) ? static_cast<char>(c) : '?';
+                std::snprintf(buf, sizeof buf, "'%c'(%u) ", ch, c);
+                chars_s += buf;
+            }
+            spdlog::info("[OVERLAY][DIAG] feed_input drain: keys=[{}] chars=[{}]", keys_s, chars_s);
+        }
         for (const auto &e : g_key_events)
             io.AddKeyEvent(e.key, e.down);
         g_key_events.clear();
